@@ -6,7 +6,7 @@ set -euo pipefail
 # =========================
 PROJECT_NAME="inkrova"
 BRANCH="main"
-https://github.com/anon9497/inkrova.git"
+GITHUB_REPO_URL="https://github.com/anon9497/inkrova.git"
 SSH_PORT="22"
 
 # =========================
