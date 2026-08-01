@@ -330,12 +330,137 @@ list_projects() {
   pause
 }
 
+# ---------------------------------------------------------------------------
+# CLOUDFLARE TUNNEL
+# ---------------------------------------------------------------------------
+
+install_cloudflared() {
+  need_root
+
+  if command -v cloudflared >/dev/null 2>&1; then
+    echo "cloudflared sudah terinstall: $(cloudflared --version)"
+    return 0
+  fi
+
+  echo "==> Install cloudflared..."
+
+  install -m 0755 -d /usr/share/keyrings
+
+  curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+    -o /usr/share/keyrings/cloudflare-main.gpg
+
+  . /etc/os-release
+
+  echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(echo "$VERSION_CODENAME") main" \
+    > /etc/apt/sources.list.d/cloudflared.list
+
+  apt update
+  apt install -y cloudflared
+
+  echo "==> cloudflared terinstall: $(cloudflared --version)"
+}
+
+setup_cloudflare_tunnel() {
+  need_root
+
+  install_cloudflared
+
+  if systemctl is-active --quiet cloudflared 2>/dev/null; then
+    if ! whiptail --yesno "Service cloudflared udah jalan di VPS ini.
+
+Lanjut dan timpa dengan tunnel token baru?" 12 70; then
+      return
+    fi
+    systemctl stop cloudflared || true
+    cloudflared service uninstall || true
+  fi
+
+  whiptail --msgbox "Sebelum lanjut, siapin dulu Tunnel Token dari Cloudflare:
+
+1. Buka dashboard Cloudflare > Zero Trust > Networks > Tunnels
+2. Create a tunnel > Cloudflared
+3. Kasih nama tunnel (misal: inkrova-vps)
+4. Di halaman 'Install connector', copy token yang muncul
+   (token panjang setelah 'cloudflared service install')
+5. Public Hostname bisa diatur nanti di dashboard,
+   arahin ke http://localhost:<PORT_APP_LO>
+
+Token TIDAK sama dengan API key/token biasa, ini khusus tunnel." 22 75
+
+  TUNNEL_TOKEN=$(whiptail --inputbox "Paste Tunnel Token dari Cloudflare:" 12 90 3>&1 1>&2 2>&3) || return
+
+  if [[ -z "$TUNNEL_TOKEN" ]]; then
+    whiptail --msgbox "Token kosong, dibatalin." 10 50
+    return
+  fi
+
+  cloudflared service install "$TUNNEL_TOKEN"
+
+  systemctl enable cloudflared
+  systemctl restart cloudflared
+
+  sleep 2
+
+  if systemctl is-active --quiet cloudflared; then
+    whiptail --msgbox "Cloudflare Tunnel aktif dan jalan sebagai service.
+
+Sekarang tinggal set Public Hostname di dashboard Cloudflare
+(Zero Trust > Networks > Tunnels > pilih tunnel > Public Hostname)
+arahin ke http://localhost:<PORT_APP_LO>, misal:
+  Service: http://localhost:3000
+
+Cek status kapan aja lewat menu 'Cloudflare Tunnel Status'." 18 75
+  else
+    whiptail --msgbox "Tunnel keinstall tapi service belum aktif.
+Cek log manual: journalctl -u cloudflared -n 50" 12 70
+  fi
+}
+
+cloudflare_tunnel_status() {
+  need_root
+
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    echo "cloudflared belum terinstall."
+    pause
+    return
+  fi
+
+  echo "=== CLOUDFLARED VERSION ==="
+  cloudflared --version || true
+  echo
+
+  echo "=== SERVICE STATUS ==="
+  systemctl status cloudflared --no-pager || true
+  echo
+
+  echo "=== LOG TERAKHIR (50 baris) ==="
+  journalctl -u cloudflared -n 50 --no-pager || true
+
+  pause
+}
+
+remove_cloudflare_tunnel() {
+  need_root
+
+  if ! whiptail --yesno "Yakin mau uninstall cloudflared service dari VPS ini?
+
+(Tunnel di dashboard Cloudflare tidak ikut kehapus,
+cuma koneksi connector-nya dari VPS ini yang diputus.)" 12 70; then
+    return
+  fi
+
+  systemctl stop cloudflared || true
+  cloudflared service uninstall || true
+
+  whiptail --msgbox "Cloudflared service udah dicopot dari VPS ini." 10 60
+}
+
 main_menu() {
   need_root
   install_whiptail
 
   while true; do
-    CHOICE=$(whiptail --title "VPS MANAGER - Docker + Hermes" --menu "Pilih menu:" 22 75 13 \
+    CHOICE=$(whiptail --title "VPS MANAGER - Docker + Hermes" --menu "Pilih menu:" 26 78 16 \
       "1" "Full Setup VPS dari Nol" \
       "2" "Add New Project" \
       "3" "Deploy Project" \
@@ -348,6 +473,9 @@ main_menu() {
       "10" "Docker Cleanup" \
       "11" "System Info" \
       "12" "List Projects" \
+      "13" "Setup Cloudflare Tunnel" \
+      "14" "Cloudflare Tunnel Status" \
+      "15" "Remove Cloudflare Tunnel" \
       "0" "Exit" \
       3>&1 1>&2 2>&3) || exit 0
 
@@ -364,6 +492,9 @@ main_menu() {
       10) docker_cleanup ;;
       11) system_info ;;
       12) list_projects ;;
+      13) setup_cloudflare_tunnel ;;
+      14) cloudflare_tunnel_status ;;
+      15) remove_cloudflare_tunnel ;;
       0) exit 0 ;;
     esac
   done
